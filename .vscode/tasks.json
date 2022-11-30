@@ -1,0 +1,18 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run",
+            "type": "shell",
+            "command": "make;WinSCP.com",
+            "args": [
+                "/command", 
+                "open ftp://redboxing:thomas2005@192.168.1.92:5000", 
+                "put sys-rscm.nsp /atmosphere/contents/430000000000069F/exefs.nsp", 
+                "exit"
+            ]
+        }
+    ]
+}
