@@ -12,7 +12,6 @@ public:
     {
         this->buffer = (char *)malloc(size);
         this->buffer_size = size;
-        this->size = 0;
         this->write_offset = 0;
         this->read_offset = 0;
     }
@@ -21,7 +20,6 @@ public:
     {
         this->buffer = buffer;
         this->buffer_size = size;
-        this->size = size;
         this->write_offset = 0;
         this->read_offset = 0;
     }
@@ -34,11 +32,6 @@ public:
     char *getBuffer()
     {
         return this->buffer;
-    }
-
-    size_t getSize()
-    {
-        return this->size;
     }
 
     size_t getWriteOffset()
@@ -79,7 +72,9 @@ public:
 
     char *readString(size_t offset, size_t length)
     {
-        return this->read<char *>(offset, length);
+        char *value = (char *)malloc(length);
+        memcpy(value, this->buffer + offset, length);
+        return value;
     }
 
     char *readString(size_t length)
@@ -91,7 +86,7 @@ public:
 
     char *readString()
     {
-        size_t length = this->read<size_t>();
+        size_t length = this->readUnsignedLong();
         return this->readString(length);
     }
 
@@ -164,7 +159,7 @@ public:
     {
         size_t length = strlen(string);
         this->write(&length, offset, sizeof(size_t));
-        this->write(string, offset, length);
+        this->write(string, offset + sizeof(size_t), length);
     }
 
     void writeString(char *string, ...)
@@ -177,7 +172,7 @@ public:
         va_end(args);
 
         this->writeString(this->write_offset, buffer);
-        this->write_offset += strlen(string);
+        this->write_offset += strlen(buffer);
     }
 
     void writeUnsignedLong(size_t offset, uint64_t value)
@@ -224,10 +219,35 @@ public:
         this->write_offset += sizeof(uint8_t);
     }
 
+    void writeBoolean(size_t offset, bool value)
+    {
+        this->writeUnsignedByte(offset, value ? 1 : 0);
+    }
+
+    void reallocate(size_t size)
+    {
+        this->buffer = (char *)realloc(this->buffer, size);
+        this->buffer_size = size;
+    }
+
+    // offset the content of the buffer by the specified amount of bytes
+    void offset(size_t offset)
+    {
+        if (offset == 0)
+            return;
+
+        this->buffer = (char *)realloc(this->buffer, this->buffer_size + offset);
+        this->buffer_size += offset;
+
+        memmove(this->buffer + offset, this->buffer, this->buffer_size - offset);
+
+        this->write_offset += offset;
+        this->read_offset += offset;
+    }
+
 private:
     char *buffer;
     size_t buffer_size;
-    size_t size;
     size_t write_offset;
     size_t read_offset;
 };

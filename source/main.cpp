@@ -103,10 +103,12 @@ extern "C"
 Buffer *readData(int sock)
 {
     size_t length = 0;
-    recv(sock, &length, sizeof(length), 0);
+    if (recv(sock, &length, sizeof(length), 0) < 0)
+        return nullptr;
 
     char *data = (char *)malloc(length);
-    recv(sock, data, length, 0);
+    if (recv(sock, data, length, 0) < 0)
+        return nullptr;
 
     return new Buffer(data, length);
 }
@@ -118,25 +120,31 @@ void *handle_connection(void *arg)
     while (true)
     {
         Buffer *input_buffer = readData(sock);
-        Command command = *(Command *)input_buffer->readUnsignedByte();
+        if (input_buffer == nullptr)
+            break;
+
+        Command command = (Command)input_buffer->readUnsignedByte();
         Data *data = processCommands(command, input_buffer);
         delete input_buffer;
 
-        log("Sending %lx bytes of data", (sizeof(data) - sizeof(char *) + data->buffer->getSize()));
+        data->buffer->reallocate(data->buffer->getWriteOffset() + 9);
+        data->buffer->offset(9);
+        data->buffer->writeUnsignedLong(0, data->buffer->getWriteOffset() + 1);
+        data->buffer->writeBoolean(8, data->success);
 
-        int bytes_written = send(sock, data->buffer, sizeof(data) - sizeof(char *), 0);
-        bytes_written += send(sock, data->buffer->getBuffer(), data->buffer->getSize(), 0);
+        log("Sending %d bytes of data", 9 + data->buffer->getWriteOffset());
+        int bytes_written = send(sock, data->buffer->getBuffer(), data->buffer->getWriteOffset() + 9, 0);
 
         if (bytes_written < 0)
         {
             log("Failed to send data: %d", bytes_written);
-            free(data->buffer);
+            delete data->buffer;
             free(data);
             break;
         }
-        else if (bytes_written != data->buffer->getSize() + sizeof(u64))
+        else if (bytes_written != data->buffer->getWriteOffset() + 9)
         {
-            log("Failed to send all data: %d", bytes_written);
+            log("Failed to send all data: %d/%d", bytes_written, data->buffer->getWriteOffset() + 9);
             free(data->buffer);
             free(data);
             break;
@@ -199,6 +207,7 @@ int main(int argc, char *argv[])
             if ((res = pthread_create(thread_id, NULL, &handle_connection, (void *)client_socket)) != 0)
             {
                 log("Failed to create thread : %d", res);
+                close(client_socket);
             }
         }
 
@@ -217,10 +226,30 @@ Data *processCommands(Command command, Buffer *buffer)
 
     log("Processing command %s", command);
 
+    dmntcht::CheatProcessMetadata meta;
+    Result rc;
+
+    if (command != Command::forceOpenCheatProcess)
+    {
+        rc = dmntcht::getCheatProcessMetadata(&meta);
+        if (R_FAILED(rc))
+        {
+            log("Failed to get cheat process metadata: %lx", rc);
+            data->buffer->writeString("Failed to get cheat process metadata");
+            return data;
+        }
+    }
+
+    char *mode;
+    u64 address;
+    size_t size;
+    void *buf;
+
     switch (command)
     {
     case Command::forceOpenCheatProcess:
-        Result rc = dmntcht::forceOpenCheatProcess();
+        log("Forcing cheat process open");
+        rc = dmntcht::forceOpenCheatProcess();
         if (R_FAILED(rc))
         {
             data->buffer->writeString("Failed to force open cheat process");
@@ -232,17 +261,10 @@ Data *processCommands(Command command, Buffer *buffer)
         break;
 
     case Command::readMemory:
-        char *mode = buffer->readString();
-        u64 address = buffer->readUnsignedLong();
-        size_t size = buffer->readUnsignedLong();
-
-        dmntcht::CheatProcessMetadata meta;
-        Result rc = dmntcht::getCheatProcessMetadata(&meta);
-        if (R_FAILED(rc))
-        {
-            data->buffer->writeString("Failed to get cheat process metadata");
-            break;
-        }
+        log("Reading memory");
+        mode = buffer->readString();
+        address = buffer->readUnsignedLong();
+        size = buffer->readUnsignedLong();
 
         if (!strcmp(mode, "heap"))
         {
@@ -254,7 +276,7 @@ Data *processCommands(Command command, Buffer *buffer)
         }
 
         log("Reading 0x%lx bytes from 0x%lx", size, address);
-        char *buf = (char *)malloc(size);
+        buf = malloc(size);
         rc = dmntcht::readCheatProcessMemory(address, buf, size);
         if (R_FAILED(rc))
         {
@@ -267,18 +289,11 @@ Data *processCommands(Command command, Buffer *buffer)
         }
         break;
     case Command::writeMemory:
-        char *mode = buffer->readString();
-        u64 address = buffer->readUnsignedLong();
-        size_t size = buffer->readUnsignedLong();
-        void *value = buffer->read<void *>(buffer->getReadOffset(), size);
-
-        dmntcht::CheatProcessMetadata meta;
-        Result rc = dmntcht::getCheatProcessMetadata(&meta);
-        if (R_FAILED(rc))
-        {
-            data->buffer->writeString("Failed to get cheat process metadata");
-            break;
-        }
+        log("Writing memory");
+        mode = buffer->readString();
+        address = buffer->readUnsignedLong();
+        size = buffer->readUnsignedLong();
+        buf = buffer->read<void *>(buffer->getReadOffset(), size);
 
         if (!strcmp(mode, "heap"))
         {
@@ -289,7 +304,7 @@ Data *processCommands(Command command, Buffer *buffer)
             address = meta.main_nso_extents.base + address;
         }
 
-        rc = dmntcht::writeCheatProcessMemory(address, value, size);
+        rc = dmntcht::writeCheatProcessMemory(address, buf, size);
         if (R_FAILED(rc))
         {
             buffer->writeString("Failed to write memory at 0x%lx", address);
@@ -300,89 +315,43 @@ Data *processCommands(Command command, Buffer *buffer)
         }
         break;
     case Command::getTitleID:
-        dmntcht::CheatProcessMetadata meta;
-        Result rc = dmntcht::getCheatProcessMetadata(&meta);
-        if (R_FAILED(rc))
-        {
-            data->buffer->writeString("Failed to get cheat process metadata");
-        }
-        else
-        {
-            data->buffer->writeUnsignedLong(meta.title_id);
-            data->success = true;
-        }
+        log("Getting title ID");
+        data->buffer->writeUnsignedLong(meta.title_id);
+        data->success = true;
         break;
     case Command::getBuildID:
-        dmntcht::CheatProcessMetadata meta;
-        Result rc = dmntcht::getCheatProcessMetadata(&meta);
-        if (R_FAILED(rc))
-        {
-            data->buffer->writeString("Failed to get cheat process metadata");
-        }
-        else
-        {
-
-            data->buffer->writeUnsignedLong(sizeof(u8) * 32);
-            data->buffer->write(meta.main_nso_build_id, sizeof(u8) * 32);
-            data->success = true;
-        }
+        log("Getting build ID");
+        data->buffer->writeUnsignedLong(sizeof(u8) * 32);
+        data->buffer->write(meta.main_nso_build_id, sizeof(u8) * 32);
+        data->success = true;
         break;
     case Command::getHeapBaseAddress:
-        dmntcht::CheatProcessMetadata meta;
-        Result rc = dmntcht::getCheatProcessMetadata(&meta);
-        if (R_FAILED(rc))
-        {
-            data->buffer->writeString("Failed to get cheat process metadata");
-        }
-        else
-        {
-            data->buffer->writeUnsignedLong(meta.heap_extents.base);
-            data->success = true;
-        }
+        log("Getting heap base address");
+        data->buffer->writeUnsignedLong(meta.heap_extents.base);
+        data->success = true;
         break;
     case Command::getHeapSize:
-        dmntcht::CheatProcessMetadata meta;
-        Result rc = dmntcht::getCheatProcessMetadata(&meta);
-        if (R_FAILED(rc))
-        {
-            data->buffer->writeString("Failed to get cheat process metadata");
-        }
-        else
-        {
-            data->buffer->writeUnsignedLong(meta.heap_extents.size);
-            data->success = true;
-        }
+        log("Getting heap size");
+        data->buffer->writeUnsignedLong(meta.heap_extents.size);
+        data->success = true;
         break;
     case Command::getMainNsoBaseAddress:
-        dmntcht::CheatProcessMetadata meta;
-        Result rc = dmntcht::getCheatProcessMetadata(&meta);
-        if (R_FAILED(rc))
-        {
-            data->buffer->writeString("Failed to get cheat process metadata");
-        }
-        else
-        {
-            data->buffer->writeUnsignedLong(meta.main_nso_extents.base);
-            data->success = true;
-        }
+        log("Getting main NSO base address");
+        data->buffer->writeUnsignedLong(meta.main_nso_extents.base);
+        data->success = true;
         break;
     case Command::getMainNsoSize:
-        dmntcht::CheatProcessMetadata meta;
-        Result rc = dmntcht::getCheatProcessMetadata(&meta);
-        if (R_FAILED(rc))
-        {
-            data->buffer->writeString("Failed to get cheat process metadata");
-        }
-        else
-        {
-            data->buffer->writeUnsignedLong(meta.main_nso_extents.size);
-            data->success = true;
-        }
+        log("Getting main NSO size");
+        data->buffer->writeUnsignedLong(meta.main_nso_extents.size);
+        data->success = true;
         break;
     default:
+        log("Unknown command %lx", (u8)command);
         data->buffer->writeString("Unknown command");
         break;
     }
+
+    log("Processed command %x", (u8)command);
 
     return data;
 }
