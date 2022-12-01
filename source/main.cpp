@@ -129,11 +129,11 @@ void *handle_connection(void *arg)
 
         data->buffer->reallocate(data->buffer->getWriteOffset() + 9);
         data->buffer->offset(9);
-        data->buffer->writeUnsignedLong(0, data->buffer->getWriteOffset() + 1);
+        data->buffer->writeUnsignedLong(0, data->buffer->getWriteOffset() - 8);
         data->buffer->writeBoolean(8, data->success);
 
-        log("Sending %d bytes of data", 9 + data->buffer->getWriteOffset());
-        int bytes_written = send(sock, data->buffer->getBuffer(), data->buffer->getWriteOffset() + 9, 0);
+        log("Sending %d bytes of data", data->buffer->getWriteOffset());
+        int bytes_written = send(sock, data->buffer->getBuffer(), data->buffer->getWriteOffset(), 0);
 
         if (bytes_written < 0)
         {
@@ -142,9 +142,9 @@ void *handle_connection(void *arg)
             free(data);
             break;
         }
-        else if (bytes_written != data->buffer->getWriteOffset() + 9)
+        else if (bytes_written != data->buffer->getWriteOffset())
         {
-            log("Failed to send all data: %d/%d", bytes_written, data->buffer->getWriteOffset() + 9);
+            log("Failed to send all data: %d/%d", bytes_written, data->buffer->getWriteOffset());
             free(data->buffer);
             free(data);
             break;
@@ -224,13 +224,14 @@ Data *processCommands(Command command, Buffer *buffer)
     data->success = false;
     data->buffer = new Buffer(128);
 
-    log("Processing command %s", command);
+    log("Processing command %d", command);
 
     dmntcht::CheatProcessMetadata meta;
     Result rc;
 
     if (command != Command::forceOpenCheatProcess)
     {
+        log("Getting cheat process metadata");
         rc = dmntcht::getCheatProcessMetadata(&meta);
         if (R_FAILED(rc))
         {
@@ -252,10 +253,12 @@ Data *processCommands(Command command, Buffer *buffer)
         rc = dmntcht::forceOpenCheatProcess();
         if (R_FAILED(rc))
         {
+            log("Failed to force cheat process open: %lx", rc);
             data->buffer->writeString("Failed to force open cheat process");
         }
         else
         {
+            log("Successfully forced cheat process open");
             data->success = true;
         }
         break;
