@@ -70,6 +70,49 @@ public:
         return value;
     }
 
+    template <typename T>
+    T read(size_t length)
+    {
+        T value;
+        memcpy(&value, this->buffer + this->read_offset, length);
+        this->read_offset += length;
+        return value;
+    }
+
+    template <typename T>
+    T readCompressed(u32 *length)
+    {
+        u8 compressedFlag = this->read<u8>(sizeof(u8));
+        u32 decompressedLength = this->read<u32>(sizeof(u32));
+
+        *length = decompressedLength;
+
+        if (compressedFlag == 0)
+        {
+            return this->read<T>(decompressedLength);
+        }
+        else
+        {
+            u32 compressedLength = this->read<u32>(sizeof(u32));
+
+            T tmp = (T)malloc(compressedLength);
+
+            u8 pos = 0;
+            for (int i = 0; i < compressedLength; i += 2)
+            {
+                u8 value = this->read<u8>(sizeof(u8));
+                u8 count = this->read<u8>(sizeof(u8));
+
+                for (int j = 0; j < count; j++)
+                {
+                    tmp[pos++] = value;
+                }
+            }
+
+            return tmp;
+        }
+    }
+
     char *readString(size_t offset, size_t length)
     {
         char *value = (char *)malloc(length);
@@ -153,6 +196,40 @@ public:
     {
         this->write(data, this->write_offset, length);
         this->write_offset += length;
+    }
+
+    void writeCompressed(void *data, size_t length)
+    {
+        static u8 tmp[2048 * 4 * 2];
+        u32 pos = 0;
+
+        for (u32 i = 0; i < length; i++)
+        {
+            u8 value = ((u8 *)data)[i];
+            u8 rle = 1;
+
+            while (rle < 255 && i + 1 < length && ((u8 *)data)[i + 1] == value)
+            {
+                rle++;
+                i++;
+            }
+
+            tmp[pos++] = value;
+            tmp[pos++] = rle;
+        }
+
+        u8 compressedFlag = pos > length ? 0 : 1;
+        this->write(&compressedFlag, sizeof(u8));
+        this->write(&length, sizeof(u32));
+        if (!compressedFlag)
+        {
+            this->write(data, length);
+        }
+        else
+        {
+            this->write(&pos, sizeof(u32));
+            this->write(tmp, pos);
+        }
     }
 
     void writeString(size_t offset, char *string)

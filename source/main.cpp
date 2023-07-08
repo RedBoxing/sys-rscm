@@ -15,8 +15,17 @@
 #include "dmnt/dmntcht.hpp"
 #include "utils.hpp"
 
-#define INNER_HEAP_SIZE 0x80000
+#define INNER_HEAP_SIZE 0x41A000
+#define MAX_BUFFER_SIZE 2048 * 4
+
+#define VERSION_MAJOR 1
+#define VERSION_MINOR 0
+#define VERSION_PATCH 0
+
 u64 mainLoopSleepTime = 50;
+u64 attachedProcessId = 0;
+Handle debugHandle;
+Status status = Status::Stopped;
 
 static const SocketInitConfig sockInitConf = {
     .bsdsockets_version = 1,
@@ -71,6 +80,10 @@ extern "C"
             setsysExit();
         }
 
+        rc = pmdmntInitialize();
+        if (R_FAILED(rc))
+            diagAbortWithResult(MAKERESULT(Module_Libnx, LibnxError_NotInitialized));
+
         rc = fsInitialize();
         if (R_FAILED(rc))
             diagAbortWithResult(MAKERESULT(Module_Libnx, LibnxError_InitFail_FS));
@@ -81,36 +94,50 @@ extern "C"
         if (R_FAILED(rc))
             fatalThrow(rc);
 
-        rc = dmntcht::initialize();
+        rc = pminfoInitialize();
         if (R_FAILED(rc))
             fatalThrow(rc);
+
+        /*  rc = dmntcht::initialize();
+          if (R_FAILED(rc))
+              fatalThrow(rc);*/
 
         smExit();
     }
 
     void __appExit(void)
     {
-        dmntcht::exit();
+        // dmntcht::exit();
+        pminfoExit();
         socketExit();
+        pmdmntExit();
         fsdevUnmountAll();
         fsExit();
+        smExit();
     }
 
 #ifdef __cplusplus
 }
 #endif
 
-Buffer *readData(int sock)
+Packet *readPacket(int sock)
 {
-    size_t length = 0;
-    if (recv(sock, &length, sizeof(length), 0) < 0)
+    PacketHeader header = {Command::None, {0}, 0};
+    if (recv(sock, &header, sizeof(header), 0) < 0)
         return nullptr;
 
-    char *data = (char *)malloc(length);
-    if (recv(sock, data, length, 0) < 0)
+    log("Received packet with command %d and size %d", header.command, header.size);
+
+    for (int i = 0; i < 16; i++)
+        log("%02x", header.uuid[i]);
+
+    char *data = (char *)malloc(header.size);
+    if (recv(sock, data, header.size, 0) < 0)
         return nullptr;
 
-    return new Buffer(data, length);
+    log("Received packet data: %s", data);
+
+    return new Packet{header, new Buffer(data, header.size)};
 }
 
 void *handle_connection(void *arg)
@@ -119,40 +146,43 @@ void *handle_connection(void *arg)
 
     while (true)
     {
-        Buffer *input_buffer = readData(sock);
-        if (input_buffer == nullptr)
+        Packet *packet = readPacket(sock);
+        if (packet == nullptr)
+        {
+            log("Failed to read packet");
             break;
+        }
 
-        Command command = (Command)input_buffer->readUnsignedByte();
-        Data *data = processCommands(command, input_buffer);
-        delete input_buffer;
+        Buffer *data = processCommands(packet->header.command, packet->data);
+        delete packet->data;
 
-        data->buffer->reallocate(data->buffer->getWriteOffset() + 9);
-        data->buffer->offset(9);
-        data->buffer->writeUnsignedLong(0, data->buffer->getWriteOffset() - 8);
-        data->buffer->writeBoolean(8, data->success);
+        // data->reallocate(data->getWriteOffset() + (1 + 16 + 4));
+        size_t size = data->getWriteOffset() + (1 + 16 + 4);
 
-        log("Sending %d bytes of data", data->buffer->getWriteOffset());
-        int bytes_written = send(sock, data->buffer->getBuffer(), data->buffer->getWriteOffset(), 0);
+        data->offset(1 + 16 + 4);
+        data->setWriteOffset(0);
+        data->writeUnsignedByte((u8)packet->header.command);
+        data->write(packet->header.uuid, 16);
+        data->writeUnsignedInt(size);
+
+        int bytes_written = send(sock, data->getBuffer(), data->getWriteOffset() + size, 0);
 
         if (bytes_written < 0)
         {
             log("Failed to send data: %d", bytes_written);
-            delete data->buffer;
+            delete data;
             free(data);
             break;
         }
-        else if (bytes_written != data->buffer->getWriteOffset())
+        else if (bytes_written != data->getWriteOffset() + size)
         {
-            log("Failed to send all data: %d/%d", bytes_written, data->buffer->getWriteOffset());
-            free(data->buffer);
+            log("Failed to send all data: %d", bytes_written);
+            free(data);
             free(data);
             break;
         }
 
-        log("Sent %d bytes", bytes_written);
-
-        delete data->buffer;
+        delete data;
         free(data);
     }
 
@@ -166,10 +196,10 @@ int main(int argc, char *argv[])
 
     sockaddr_in addr;
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(6060);
+    addr.sin_port = htons(1337);
     addr.sin_addr.s_addr = INADDR_ANY;
 
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock < 0)
     {
         log("Failed to create socket: %d", sock);
@@ -218,139 +248,195 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-Data *processCommands(Command command, Buffer *buffer)
+Buffer *processCommands(Command command, Buffer *buffer)
 {
-    Data *data = (Data *)malloc(sizeof(Data));
-    data->success = false;
-    data->buffer = new Buffer(128);
+    Buffer *data = new Buffer(128);
 
-    log("Processing command %d", command);
-
-    dmntcht::CheatProcessMetadata meta;
     Result rc;
-
-    if (command != Command::forceOpenCheatProcess)
-    {
-        log("Getting cheat process metadata");
-        rc = dmntcht::getCheatProcessMetadata(&meta);
-        if (R_FAILED(rc))
-        {
-            log("Failed to get cheat process metadata: %lx", rc);
-            data->buffer->writeString("Failed to get cheat process metadata");
-            return data;
-        }
-    }
-
-    char *mode;
+    MemoryInfo meminfo;
     u64 address;
     size_t size;
     void *buf;
+    u64 pid;
+    u32 max;
+    u64 *pids;
+    u32 id;
+    u64 flags;
+    u64 tid;
+    int maxpids;
+    s32 count;
+
+    log("Processing command %d", command);
 
     switch (command)
     {
-    case Command::forceOpenCheatProcess:
-        log("Forcing cheat process open");
-        rc = dmntcht::forceOpenCheatProcess();
-        if (R_FAILED(rc))
-        {
-            log("Failed to force cheat process open: %lx", rc);
-            data->buffer->writeString("Failed to force open cheat process");
-        }
-        else
-        {
-            log("Successfully forced cheat process open");
-            data->success = true;
-        }
-        break;
+    case Command::Attach:
+        if (debugHandle != INVALID_HANDLE)
+            svcCloseHandle(debugHandle);
 
-    case Command::readMemory:
-        log("Reading memory");
-        mode = buffer->readString();
+        pid = buffer->readUnsignedLong();
+        attachedProcessId = pid;
+        rc = svcDebugActiveProcess(&debugHandle, pid);
+        data->writeUnsignedInt(rc);
+        break;
+    case Command::Detach:
+        attachedProcessId = 0;
+        if (status == Status::Paused)
+        {
+            void *event;
+            rc = svcGetDebugEvent(&event, debugHandle);
+            if (R_FAILED(rc))
+            {
+                data->writeUnsignedInt(rc);
+                break;
+            }
+
+            rc = svcContinueDebugEvent(debugHandle, 4 | 2 | 1, 0, 0);
+            if (R_SUCCEEDED(rc))
+                status = Status::Running;
+        }
+        rc = svcCloseHandle(debugHandle);
+        debugHandle = INVALID_HANDLE;
+        data->writeUnsignedInt(rc);
+        break;
+    case Command::GetStatus:
+        data->writeUnsignedByte((u8)status);
+        data->writeUnsignedByte(VERSION_MAJOR);
+        data->writeUnsignedByte(VERSION_MINOR);
+        data->writeUnsignedByte(VERSION_PATCH);
+        break;
+    case Command::QueryMemory:
         address = buffer->readUnsignedLong();
-        size = buffer->readUnsignedLong();
+        u32 pageinfo;
+        meminfo = {0};
+        rc = svcQueryDebugProcessMemory(&meminfo, &pageinfo, debugHandle, address);
 
-        if (!strcmp(mode, "heap"))
-        {
-            address = meta.heap_extents.base + address;
-        }
-        else if (!strcmp(mode, "main"))
-        {
-            address = meta.main_nso_extents.base + address;
-        }
+        data->writeUnsignedLong(meminfo.addr);
+        data->writeUnsignedLong(meminfo.size);
+        data->writeUnsignedInt(meminfo.type);
+        data->writeUnsignedInt(meminfo.perm);
 
-        log("Reading 0x%lx bytes from 0x%lx", size, address);
-        buf = malloc(size);
-        rc = dmntcht::readCheatProcessMemory(address, buf, size);
-        if (R_FAILED(rc))
-        {
-            buffer->writeString("Failed to read memory at 0x%lx", address);
-        }
-        else
-        {
-            data->success = true;
-            data->buffer->write(buf, size);
-        }
+        data->writeUnsignedInt(rc);
         break;
-    case Command::writeMemory:
-        log("Writing memory");
-        mode = buffer->readString();
+    case Command::QueryMemoryMulti:
         address = buffer->readUnsignedLong();
-        size = buffer->readUnsignedLong();
-        buf = buffer->read<void *>(buffer->getReadOffset(), size);
+        max = buffer->readUnsignedInt();
 
-        if (!strcmp(mode, "heap"))
+        for (int i = 0; i < max; i++)
         {
-            address = meta.heap_extents.base + address;
-        }
-        else if (!strcmp(mode, "main"))
-        {
-            address = meta.main_nso_extents.base + address;
+            u32 pageinfo;
+            meminfo = {0};
+            rc = svcQueryDebugProcessMemory(&meminfo, &pageinfo, debugHandle, address);
+
+            data->writeUnsignedLong(meminfo.addr);
+            data->writeUnsignedLong(meminfo.size);
+            data->writeUnsignedInt(meminfo.type);
+            data->writeUnsignedInt(meminfo.perm);
+
+            data->writeUnsignedInt(rc);
+
+            if (meminfo.type == MemoryType::MemType_Reserved || R_FAILED(rc))
+            {
+                break;
+            }
+
+            address += meminfo.size;
         }
 
-        rc = dmntcht::writeCheatProcessMemory(address, buf, size);
+        data->writeUnsignedInt(rc);
+        break;
+    case Command::ReadMemory:
+        address = buffer->readUnsignedLong();
+        size = buffer->readUnsignedInt();
+
+        while (size > 0)
+        {
+            u64 len = size < MAX_BUFFER_SIZE ? size : MAX_BUFFER_SIZE;
+            buf = malloc(len);
+            rc = svcReadDebugProcessMemory(buf, debugHandle, address, len);
+            data->writeUnsignedInt(rc);
+
+            if (R_FAILED(rc))
+            {
+                free(buf);
+                break;
+            }
+
+            data->writeCompressed(buf, len);
+            free(buf);
+
+            address += len;
+            size -= len;
+        }
+        break;
+    case Command::WriteMemory:
+        address = buffer->readUnsignedLong();
+        buf = buffer->readCompressed<u8 *>((u32 *)&size);
+
+        rc = svcWriteDebugProcessMemory(debugHandle, buf, address, size);
+        data->writeUnsignedInt(rc);
+        break;
+    case Command::Pause:
+        rc = svcBreakDebugProcess(debugHandle);
+        if (R_SUCCEEDED(rc))
+            status = Status::Paused;
+        data->writeUnsignedInt(rc);
+        break;
+    case Command::Resume:
+        rc = svcGetDebugEvent(&buf, debugHandle);
         if (R_FAILED(rc))
         {
-            buffer->writeString("Failed to write memory at 0x%lx", address);
+            data->writeUnsignedInt(rc);
+            break;
         }
-        else
+
+        rc = svcContinueDebugEvent(debugHandle, 4 | 2 | 1, 0, 0);
+        if (R_SUCCEEDED(rc))
+            status = Status::Running;
+        data->writeUnsignedInt(rc);
+        break;
+    case Command::GetCurrentPID:
+        rc = pmdmntGetApplicationProcessId(&pid);
+        data->writeUnsignedInt(rc);
+        data->writeUnsignedLong(pid);
+        break;
+    case Command::GetAttachedPID:
+        data->writeUnsignedInt(attachedProcessId);
+        break;
+    case Command::GetTitleID:
+        pid = buffer->readUnsignedLong();
+
+        rc = pminfoGetProgramId(&tid, pid);
+        data->writeUnsignedInt(rc);
+        data->writeUnsignedLong(tid);
+        break;
+    case Command::GetPIDs:
+        maxpids = MAX_BUFFER_SIZE / sizeof(u64);
+
+        pids = (u64 *)malloc(MAX_BUFFER_SIZE);
+        rc = svcGetProcessList(&count, pids, maxpids);
+
+        data->writeUnsignedInt(rc);
+        if (R_SUCCEEDED(rc))
         {
-            data->success = true;
+            data->writeUnsignedInt(count);
+            data->write(pids, count * sizeof(u64));
         }
         break;
-    case Command::getTitleID:
-        log("Getting title ID");
-        data->buffer->writeUnsignedLong(meta.title_id);
-        data->success = true;
-        break;
-    case Command::getBuildID:
-        log("Getting build ID");
-        data->buffer->writeUnsignedLong(sizeof(u8) * 32);
-        data->buffer->write(meta.main_nso_build_id, sizeof(u8) * 32);
-        data->success = true;
-        break;
-    case Command::getHeapBaseAddress:
-        log("Getting heap base address");
-        data->buffer->writeUnsignedLong(meta.heap_extents.base);
-        data->success = true;
-        break;
-    case Command::getHeapSize:
-        log("Getting heap size");
-        data->buffer->writeUnsignedLong(meta.heap_extents.size);
-        data->success = true;
-        break;
-    case Command::getMainNsoBaseAddress:
-        log("Getting main NSO base address");
-        data->buffer->writeUnsignedLong(meta.main_nso_extents.base);
-        data->success = true;
-        break;
-    case Command::getMainNsoSize:
-        log("Getting main NSO size");
-        data->buffer->writeUnsignedLong(meta.main_nso_extents.size);
-        data->success = true;
+    case Command::SetBreakpoint:
+        id = buffer->readUnsignedInt();
+        address = buffer->readUnsignedLong();
+        flags = buffer->readUnsignedLong();
+
+        if (address == 0)
+            address = debugHandle;
+
+        rc = svcSetHardwareBreakPoint(id, flags, address);
+        data->writeUnsignedInt(rc);
         break;
     default:
         log("Unknown command %lx", (u8)command);
-        data->buffer->writeString("Unknown command");
+        data->writeString("Unknown command");
         break;
     }
 

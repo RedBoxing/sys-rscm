@@ -3,25 +3,49 @@
 #include <switch.h>
 #include "buffer.hpp"
 
-#pragma pack(push, 1)
-struct Data
+enum class Command : u8
 {
-    bool success;
-    Buffer *buffer;
-};
-#pragma pack(pop)
+    None,
 
-enum class Command : uint8_t
+    Attach,
+    Detach,
+    GetStatus,
+
+    QueryMemory,
+    QueryMemoryMulti,
+    ReadMemory,
+    WriteMemory,
+
+    Pause,
+    Resume,
+
+    GetCurrentPID,
+    GetAttachedPID,
+    GetTitleID,
+    GetPIDs,
+
+    SetBreakpoint
+};
+
+enum class Status : u8
 {
-    forceOpenCheatProcess,
-    readMemory,
-    writeMemory,
-    getTitleID,
-    getBuildID,
-    getHeapBaseAddress,
-    getHeapSize,
-    getMainNsoBaseAddress,
-    getMainNsoSize,
+    Stopped,
+    Running,
+    Paused
 };
 
-Data *processCommands(Command command, Buffer *buffer);
+struct PacketHeader
+{
+    Command command;
+    u8 uuid[16];
+    u32 size;
+};
+
+struct Packet
+{
+    PacketHeader header;
+    Buffer *data;
+};
+
+Buffer *
+processCommands(Command command, Buffer *buffer);

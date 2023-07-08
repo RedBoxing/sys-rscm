@@ -1,18 +1,18 @@
 # sys-rscm : Red's Stupid Cheat Module
-Inspired by [sys-botbase](https://github.com/olliz0r/sys-botbase/) and [sys-netcheat](https://github.com/jakibaki/sys-netcheat/)
+Inspired by [sys-botbase](https://github.com/olliz0r/sys-botbase/), [sys-netcheat](https://github.com/jakibaki/sys-netcheat/) and [Noexes](https://github.com/mdbell/Noexes)
 
 ## What is this?
-This is a cheat module for the Nintendo Switch. It allows you to read and write to the memory of any process running on the Switch. It is intended to be used with [RSCD](https://github.com/RedBoxing/RSCD) 
+This is a cheat module for the Nintendo Switch. It allows you to read and write to the memory of any process running on the Switch. It is intended to be used with [rscm-rs](https://github.com/RedBoxing/rscm-rs) 
 
-## What can it do ?
-- Read memory of the current process
-- Write memory of the current process
-- get TitleID of the current process
-- get BuildID of the current process
-- get the base address of the current process's main NSO
-- get the size of the current process's main NSO
-- get the base address of the current process's Heap
-- get the size of the current process's Heap
+## Features
+- [x] Attach to any process running on the Switch
+- [x] Read and write to the memory of the process
+- [x] Query the memory of the process
+- [x] Pause and resume the process
+- [-] Set a breakpoint on the memory of the process 
+- [x] Get the list of the processes running on the Switch
+- [x] Get the current Process ID
+- [x] Get the title ID of any process
 
 ## How do I install it?
 - Download the latest release from the [releases page](https://github.com/RedBoxing/sys-rscm/releases/latest)
@@ -22,6 +22,6 @@ This is a cheat module for the Nintendo Switch. It allows you to read and write 
 ## FAQ
 ### How do I use it?
 - Install the sysmodule
-- Download [RSCD]() or a client capable of using the sysmodule
+- Download [rscm-rs](https://github.com/RedBoxing/rscm-rs) or a client capable of using the sysmodule
 - Connect your client on the port 6060 of your nintendo switch
 - Enjoy !

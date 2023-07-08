@@ -6,6 +6,7 @@
                 "C:\\devkitPro\\libnx\\include",
                 "C:\\devkitPro\\devkitA64\\include",
                 "C:\\devkitPro\\devkitA64\\aarch64-none-elf\\include",
+                "C:\\devkitPro\\libnx\\include",
                 "${workspaceFolder}/include"
             ],
             "defines": [],
@@ -14,6 +15,24 @@
             "cStandard": "c11",
             "cppStandard": "c++17",
             "intelliSenseMode": "gcc-x64",
+            "configurationProvider": "ms-vscode.makefile-tools"
+        },
+        {
+            "name": "Linux",
+            "includePath": [
+                "/opt/devkitpro/devkitA64/include/**",
+                "/opt/devkitpro/devkitA64/aarch64-none-elf/include/**",
+                "/opt/devkitpro/portlibs/switch/include/**",
+                "/opt/devkitpro/libnx/include/**",
+                "${workspaceFolder}/**"
+            ],
+            "defines": [
+                "__SWITCH__"
+            ],
+            "compilerPath": "/opt/devkitpro/devkitA64/bin/aarch64-none-elf-g++",
+            "cStandard": "c17",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "linux-gcc-arm64",
             "configurationProvider": "ms-vscode.makefile-tools"
         }
     ],
