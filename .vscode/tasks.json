@@ -6,12 +6,11 @@
         {
             "label": "Run",
             "type": "shell",
-            "command": "make;WinSCP.com",
+            "command": "make;ftp",
             "args": [
-                "/command", 
-                "open ftp://redboxing:thomas2005@192.168.1.92:5000", 
-                "put sys-rscm.nsp /atmosphere/contents/430000000000069F/exefs.nsp", 
-                "exit"
+                "-u", 
+                "ftp://redboxing:thomas2005@10.10.0.12:5000/atmosphere/contents/430000000000069F/exefs.nsp", 
+                "sys-rscm.nsp"
             ]
         }
     ]

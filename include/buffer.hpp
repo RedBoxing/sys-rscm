@@ -57,6 +57,12 @@ public:
     template <typename T>
     T read(size_t offset, size_t length)
     {
+        if (offset + length > this->buffer_size)
+        {
+            printf("Buffer::read: offset + length > buffer_size\n");
+            exit(1);
+        }
+
         T value;
         memcpy(&value, this->buffer + offset, length);
         return value;
@@ -65,6 +71,12 @@ public:
     template <typename T>
     T read()
     {
+        if (this->read_offset + sizeof(T) > this->buffer_size)
+        {
+            printf("Buffer::read: offset + length > buffer_size\n");
+            exit(1);
+        }
+
         T value;
         memcpy(&value, this->buffer + this->read_offset, sizeof(T));
         return value;
@@ -73,8 +85,29 @@ public:
     template <typename T>
     T read(size_t length)
     {
+        if (this->read_offset + length > this->buffer_size)
+        {
+            printf("Buffer::read: offset + length > buffer_size\n");
+            exit(1);
+        }
+
         T value;
         memcpy(&value, this->buffer + this->read_offset, length);
+        this->read_offset += length;
+        return value;
+    }
+
+    template <typename T>
+    T *read_array(size_t length)
+    {
+        if (this->read_offset + length > this->buffer_size)
+        {
+            printf("Buffer::read: offset + length > buffer_size\n");
+            exit(1);
+        }
+
+        T *value = (T *)malloc(length);
+        memcpy(value, this->buffer + this->read_offset, length);
         this->read_offset += length;
         return value;
     }

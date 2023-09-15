@@ -12,7 +12,6 @@
 #include <cstdarg>
 #include <pthread.h>
 
-#include "dmnt/dmntcht.hpp"
 #include "utils.hpp"
 
 #define INNER_HEAP_SIZE 0x41A000
@@ -26,23 +25,6 @@ u64 mainLoopSleepTime = 50;
 u64 attachedProcessId = 0;
 Handle debugHandle;
 Status status = Status::Stopped;
-
-static const SocketInitConfig sockInitConf = {
-    .bsdsockets_version = 1,
-
-    .tcp_tx_buf_size = 0x200,
-    .tcp_rx_buf_size = 0x400,
-    .tcp_tx_buf_max_size = 0x400,
-    .tcp_rx_buf_max_size = 0x800,
-    // We're not using tcp anyways
-
-    .udp_tx_buf_size = 0x2600,
-    .udp_rx_buf_size = 0xA700,
-
-    .sb_efficiency = 2,
-
-    .num_bsd_sessions = 3,
-    .bsd_service_type = BsdServiceType_User};
 
 #ifdef __cplusplus
 extern "C"
@@ -80,17 +62,17 @@ extern "C"
             setsysExit();
         }
 
+        rc = ldrDmntInitialize();
+        if (R_FAILED(rc))
+        {
+            fatalThrow(MAKERESULT(Module_Libnx, LibnxError_AlreadyInitialized));
+        }
+
         rc = pmdmntInitialize();
         if (R_FAILED(rc))
             diagAbortWithResult(MAKERESULT(Module_Libnx, LibnxError_NotInitialized));
 
-        rc = fsInitialize();
-        if (R_FAILED(rc))
-            diagAbortWithResult(MAKERESULT(Module_Libnx, LibnxError_InitFail_FS));
-
-        fsdevMountSdmc();
-
-        rc = socketInitialize(&sockInitConf);
+        rc = socketInitialize(socketGetDefaultInitConfig());
         if (R_FAILED(rc))
             fatalThrow(rc);
 
@@ -98,22 +80,25 @@ extern "C"
         if (R_FAILED(rc))
             fatalThrow(rc);
 
-        /*  rc = dmntcht::initialize();
-          if (R_FAILED(rc))
-              fatalThrow(rc);*/
+        rc = fsInitialize();
+        if (R_FAILED(rc))
+            diagAbortWithResult(MAKERESULT(Module_Libnx, LibnxError_InitFail_FS));
+
+        rc = fsdevMountSdmc();
+        if (R_FAILED(rc))
+            diagAbortWithResult(MAKERESULT(Module_Libnx, LibnxError_InitFail_FS));
 
         smExit();
     }
 
     void __appExit(void)
     {
-        // dmntcht::exit();
+        fsdevUnmountAll();
+        fsExit();
         pminfoExit();
         socketExit();
         pmdmntExit();
-        fsdevUnmountAll();
-        fsExit();
-        smExit();
+        ldrDmntExit();
     }
 
 #ifdef __cplusplus
@@ -122,22 +107,25 @@ extern "C"
 
 Packet *readPacket(int sock)
 {
-    PacketHeader header = {Command::None, {0}, 0};
-    if (recv(sock, &header, sizeof(header), 0) < 0)
+    char *raw_buffer = (char *)malloc(1 + 16 + 4);
+    if (recv(sock, raw_buffer, 1 + 16 + 4, 0) < 0)
         return nullptr;
 
-    log("Received packet with command %d and size %d", header.command, header.size);
+    Buffer *buffer = new Buffer(raw_buffer, 1 + 16 + 4);
 
-    for (int i = 0; i < 16; i++)
-        log("%02x", header.uuid[i]);
+    u8 command = buffer->readUnsignedByte();
+    u8 *uuid = buffer->read_array<u8>(16);
+    u32 size = buffer->readUnsignedInt();
 
-    char *data = (char *)malloc(header.size);
-    if (recv(sock, data, header.size, 0) < 0)
+    PacketHeader *header = new PacketHeader{static_cast<Command>(command), uuid, size};
+
+    log("Received packet with command %d and size %d", header->command, header->size);
+
+    char *data = (char *)malloc(header->size);
+    if (recv(sock, data, header->size, 0) < 0)
         return nullptr;
 
-    log("Received packet data: %s", data);
-
-    return new Packet{header, new Buffer(data, header.size)};
+    return new Packet{header, new Buffer(data, header->size)};
 }
 
 void *handle_connection(void *arg)
@@ -153,16 +141,15 @@ void *handle_connection(void *arg)
             break;
         }
 
-        Buffer *data = processCommands(packet->header.command, packet->data);
+        Buffer *data = processCommands(packet->header->command, packet->data);
         delete packet->data;
 
-        // data->reallocate(data->getWriteOffset() + (1 + 16 + 4));
         size_t size = data->getWriteOffset() + (1 + 16 + 4);
 
         data->offset(1 + 16 + 4);
         data->setWriteOffset(0);
-        data->writeUnsignedByte((u8)packet->header.command);
-        data->write(packet->header.uuid, 16);
+        data->writeUnsignedByte((u8)packet->header->command);
+        data->write(packet->header->uuid, 16);
         data->writeUnsignedInt(size);
 
         int bytes_written = send(sock, data->getBuffer(), data->getWriteOffset() + size, 0);
@@ -220,7 +207,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    log("Listening on port 6060");
+    log("Listening on port 1337");
 
     sockaddr_in client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
@@ -271,12 +258,34 @@ Buffer *processCommands(Command command, Buffer *buffer)
     switch (command)
     {
     case Command::Attach:
-        if (debugHandle != INVALID_HANDLE)
-            svcCloseHandle(debugHandle);
-
         pid = buffer->readUnsignedLong();
-        attachedProcessId = pid;
+        log("Attaching to process %d", pid);
+
+        if (debugHandle != INVALID_HANDLE)
+        {
+            log("Closing old debug handle");
+
+            rc = svcCloseHandle(debugHandle);
+            if (R_FAILED(rc))
+            {
+                log("Failed to close debug handle: %d", rc);
+                data->writeUnsignedInt(rc);
+                break;
+            }
+        }
+
         rc = svcDebugActiveProcess(&debugHandle, pid);
+        if R_SUCCEEDED (rc)
+        {
+            attachedProcessId = pid;
+            log("Attached to process %d", pid);
+        }
+        else
+        {
+            log("Failed to attach to process: %d", rc);
+            debugHandle = INVALID_HANDLE;
+        }
+
         data->writeUnsignedInt(rc);
         break;
     case Command::Detach:
@@ -287,6 +296,7 @@ Buffer *processCommands(Command command, Buffer *buffer)
             rc = svcGetDebugEvent(&event, debugHandle);
             if (R_FAILED(rc))
             {
+                log("Failed to get debug event: %d", rc);
                 data->writeUnsignedInt(rc);
                 break;
             }
@@ -295,6 +305,7 @@ Buffer *processCommands(Command command, Buffer *buffer)
             if (R_SUCCEEDED(rc))
                 status = Status::Running;
         }
+
         rc = svcCloseHandle(debugHandle);
         debugHandle = INVALID_HANDLE;
         data->writeUnsignedInt(rc);
@@ -327,6 +338,11 @@ Buffer *processCommands(Command command, Buffer *buffer)
             u32 pageinfo;
             meminfo = {0};
             rc = svcQueryDebugProcessMemory(&meminfo, &pageinfo, debugHandle, address);
+            if (R_FAILED(rc))
+            {
+                log("Failed to query memory: %d", rc);
+                break;
+            }
 
             data->writeUnsignedLong(meminfo.addr);
             data->writeUnsignedLong(meminfo.size);
@@ -383,20 +399,39 @@ Buffer *processCommands(Command command, Buffer *buffer)
         data->writeUnsignedInt(rc);
         break;
     case Command::Resume:
-        rc = svcGetDebugEvent(&buf, debugHandle);
-        if (R_FAILED(rc))
+        if (status == Status::Paused)
         {
-            data->writeUnsignedInt(rc);
-            break;
+            void *event;
+            rc = svcGetDebugEvent(&event, debugHandle);
+            if (R_FAILED(rc))
+            {
+                log("Failed to get debug event: %d", rc);
+                data->writeUnsignedInt(rc);
+                break;
+            }
+
+            rc = svcContinueDebugEvent(debugHandle, 4 | 2 | 1, 0, 0);
+            if (R_SUCCEEDED(rc))
+                status = Status::Running;
+        }
+        else
+        {
+            rc = 0;
         }
 
-        rc = svcContinueDebugEvent(debugHandle, 4 | 2 | 1, 0, 0);
-        if (R_SUCCEEDED(rc))
-            status = Status::Running;
         data->writeUnsignedInt(rc);
         break;
     case Command::GetCurrentPID:
         rc = pmdmntGetApplicationProcessId(&pid);
+        if (R_FAILED(rc))
+        {
+            log("Failed to get current PID: %d", rc);
+        }
+        else
+        {
+            log("Current PID: %d", pid);
+        }
+
         data->writeUnsignedInt(rc);
         data->writeUnsignedLong(pid);
         break;
@@ -407,6 +442,15 @@ Buffer *processCommands(Command command, Buffer *buffer)
         pid = buffer->readUnsignedLong();
 
         rc = pminfoGetProgramId(&tid, pid);
+        if (R_FAILED(rc))
+        {
+            log("Failed to get title ID: %d", rc);
+        }
+        else
+        {
+            log("Title ID: %016lx", tid);
+        }
+
         data->writeUnsignedInt(rc);
         data->writeUnsignedLong(tid);
         break;
@@ -436,11 +480,9 @@ Buffer *processCommands(Command command, Buffer *buffer)
         break;
     default:
         log("Unknown command %lx", (u8)command);
-        data->writeString("Unknown command");
+        data->writeUnsignedInt(0);
         break;
     }
-
-    log("Processed command %x", (u8)command);
 
     return data;
 }

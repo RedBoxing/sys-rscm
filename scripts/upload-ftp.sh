@@ -1,0 +1,1 @@
+ftp -u ftp://redboxing:thomas2005@switch.redboxing.fr:5000/atmosphere/contents/430000000000069F/exefs.nsp sys-rscm.nsp

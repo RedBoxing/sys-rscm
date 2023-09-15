@@ -37,13 +37,13 @@ enum class Status : u8
 struct PacketHeader
 {
     Command command;
-    u8 uuid[16];
+    u8 *uuid; // u8 uuid[16];
     u32 size;
 };
 
 struct Packet
 {
-    PacketHeader header;
+    PacketHeader *header;
     Buffer *data;
 };
 
