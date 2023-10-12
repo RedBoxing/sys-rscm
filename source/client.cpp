@@ -17,7 +17,7 @@ Client::Client(int socket_fd)
     this->socket_fd = socket_fd;
     if (set_non_blocking(this->socket_fd) < 0)
     {
-        // log("Failed to set socket to non-blocking")
+        log("Failed to set socket to non-blocking");
         close(this->socket_fd);
         return;
     }
@@ -26,7 +26,7 @@ Client::Client(int socket_fd)
     pthread_t *thread_id = (pthread_t *)malloc(sizeof(pthread_t));
     if ((res = pthread_create(thread_id, NULL, &handle_connection_thread, (void *)this)) != 0)
     {
-        // log("Failed to create thread : %d", res);
+        log("Failed to create thread : %d", res);
         close(this->socket_fd);
     }
 }

@@ -6,10 +6,7 @@
 class Client
 {
 public:
-    Client(int socket_fd)
-    {
-        this->socket_fd = socket_fd;
-    }
+    Client(int socket_fd);
 
     void queue_packet(Packet *packet);
     void *handle_connection();

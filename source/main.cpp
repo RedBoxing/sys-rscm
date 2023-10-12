@@ -175,14 +175,14 @@ int main(int argc, char *argv[])
 
                 if (bytes_written < 0)
                 {
-                    // log("Failed to send data: %d", bytes_written);
+                    log("Failed to send data: %d", bytes_written);
                     free(packet->data);
                     free(packet);
                     break;
                 }
                 else if (bytes_written != (packet->data->getWriteOffset() + size))
                 {
-                    // log("Failed to send all data: %d", bytes_written);
+                    log("Failed to send all data: %d", bytes_written);
                     free(packet->data);
                     free(packet);
                     break;
@@ -227,7 +227,7 @@ Packet *read_packet(int socket_fd)
 
     PacketHeader *header = new PacketHeader{static_cast<Command>(command), uuid, size};
 
-    // log("Received packet with command %d and size %d", header->command, header->size);
+    log("Received packet with command %d and size %d", header->command, header->size);
 
     char *data = (char *)malloc(header->size);
     if (recv(socket_fd, data, header->size, 0) < 0)
