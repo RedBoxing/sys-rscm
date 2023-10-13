@@ -1,4 +1,3 @@
-#include "client.hpp"
 #include "debug.hpp"
 #include "utils.hpp"
 
@@ -40,15 +39,15 @@ void *Client::handle_connection()
 {
     while (true)
     {
-        if (!this->outgoing_packet_queue.empty())
+        if (!this->incomming_packet_queue.empty())
         {
-            Packet *packet = this->outgoing_packet_queue.front();
-            this->outgoing_packet_queue.pop();
+            Packet *packet = this->incomming_packet_queue.front();
+            this->incomming_packet_queue.pop();
 
             this->handle_packet(packet);
         }
 
-        svcSleepThread(1000000000);
+        svcSleepThread(50 * 1e+6L);
     }
 
     close(this->socket_fd);
@@ -253,6 +252,7 @@ void Client::handle_packet(Packet *packet)
         data->writeUnsignedInt(rc);
         break;
     case Command::GetCurrentPID:
+        log("Getting current PID");
         rc = pmdmntGetApplicationProcessId(&pid);
         if (R_FAILED(rc))
         {
@@ -261,6 +261,7 @@ void Client::handle_packet(Packet *packet)
 
         data->writeUnsignedInt(rc);
         data->writeUnsignedLong(pid);
+        log("Current PID: %d", pid);
         break;
     case Command::GetAttachedPID:
         data->writeUnsignedInt(attachedProcessId);
@@ -307,8 +308,11 @@ void Client::handle_packet(Packet *packet)
         break;
     }
 
-    if (buffer->getWriteOffset() > 0)
+    log("Command %d processed", command);
+
+    if (data->getWriteOffset() > 0)
     {
+        log("Sending response for command %d", command);
         Packet *packet = new Packet{new PacketHeader{command, uuid, data->getWriteOffset()}, data};
         this->outgoing_packet_queue.push(packet);
     }

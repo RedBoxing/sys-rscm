@@ -1,6 +1,11 @@
 #pragma once
 
+#ifndef __DEBUG_HPP__
+#define __DEBUG_HPP__
+
 #include <switch.h>
+#include "client.hpp"
+#include <vector>
 
 #define MAX_BUFFER_SIZE 2048 * 4
 #define VERSION_MAJOR 1
@@ -14,8 +19,10 @@ enum class Status : u8
     Paused
 };
 
-u64 attachedProcessId = 0;
-Handle debugHandle;
-Status status = Status::Stopped;
+extern u64 attachedProcessId;
+extern Handle debugHandle;
+extern Status status;
 
-std::vector<Client *> clients;
+extern std::vector<Client *> clients;
+
+#endif // __DEBUG_HPP__

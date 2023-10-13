@@ -11,14 +11,14 @@ public:
     void queue_packet(Packet *packet);
     void *handle_connection();
 
-    std::queue<Packet *> get_incomming_packet_queue()
+    std::queue<Packet *> *get_incomming_packet_queue()
     {
-        return this->incomming_packet_queue;
+        return &this->incomming_packet_queue;
     }
 
-    std::queue<Packet *> get_outgoing_packet_queue()
+    std::queue<Packet *> *get_outgoing_packet_queue()
     {
-        return this->outgoing_packet_queue;
+        return &this->outgoing_packet_queue;
     }
 
     int get_socket_fd()

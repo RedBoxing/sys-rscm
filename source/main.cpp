@@ -13,7 +13,6 @@
 #include <cstdarg>
 #include <poll.h>
 
-#include "client.hpp"
 #include "debug.hpp"
 #include "utils.hpp"
 
@@ -153,15 +152,16 @@ int main(int argc, char *argv[])
                 log("Accepted client %d", client_socket);
 
                 Client *client = new Client(client_socket);
+                clients.push_back(client);
             }
         }
 
         for (Client *client : clients)
         {
-            if (!client->get_outgoing_packet_queue().empty())
+            if (!client->get_outgoing_packet_queue()->empty())
             {
-                Packet *packet = client->get_outgoing_packet_queue().front();
-                client->get_outgoing_packet_queue().pop();
+                Packet *packet = client->get_outgoing_packet_queue()->front();
+                client->get_outgoing_packet_queue()->pop();
 
                 size_t size = packet->data->getWriteOffset() + (1 + 16 + 4);
 
@@ -170,6 +170,8 @@ int main(int argc, char *argv[])
                 packet->data->writeUnsignedByte((u8)packet->header->command);
                 packet->data->write(packet->header->uuid, 16);
                 packet->data->writeUnsignedInt(size);
+
+                log("Sending packet with command %d and size %d", packet->header->command, size);
 
                 size_t bytes_written = (size_t)send(client->get_socket_fd(), packet->data->getBuffer(), packet->data->getWriteOffset() + size, 0);
 
@@ -201,7 +203,13 @@ int main(int argc, char *argv[])
             if (ret > 0 && (pfds[0].revents & POLLIN))
             {
                 Packet *packet = read_packet(client->get_socket_fd());
-                client->get_incomming_packet_queue().push(packet);
+                if (packet == nullptr)
+                {
+                    log("Failed to read packet");
+                    continue;
+                }
+
+                client->get_incomming_packet_queue()->push(packet);
             }
         }
 
@@ -230,8 +238,11 @@ Packet *read_packet(int socket_fd)
     log("Received packet with command %d and size %d", header->command, header->size);
 
     char *data = (char *)malloc(header->size);
-    if (recv(socket_fd, data, header->size, 0) < 0)
+    if (header->size > 0 && recv(socket_fd, data, header->size, 0) < 0)
+    {
+        log("Failed to read data");
         return nullptr;
+    }
 
     return new Packet{header, new Buffer(data, header->size)};
 }

@@ -4,7 +4,6 @@
 #include <fcntl.h>
 #include "debug.hpp"
 #include <vector>
-#include "client.hpp"
 
 void log(const char *format, ...)
 {
