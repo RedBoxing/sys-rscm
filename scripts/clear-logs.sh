@@ -1,0 +1,1 @@
+curl ftp://$SWITCH_USER:$SWITCH_PASS@$SWITCH_HOST:5000 -Q "DELE /logs/sys-rscm.log"

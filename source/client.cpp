@@ -2,6 +2,7 @@
 #include "utils.hpp"
 
 #include <sys/socket.h>
+#include <poll.h>
 #include <pthread.h>
 #include <algorithm>
 
@@ -16,7 +17,7 @@ Client::Client(int socket_fd)
     this->socket_fd = socket_fd;
     if (set_non_blocking(this->socket_fd) < 0)
     {
-        log("Failed to set socket to non-blocking");
+        debug("Failed to set socket to non-blocking");
         close(this->socket_fd);
         return;
     }
@@ -25,29 +26,66 @@ Client::Client(int socket_fd)
     pthread_t *thread_id = (pthread_t *)malloc(sizeof(pthread_t));
     if ((res = pthread_create(thread_id, NULL, &handle_connection_thread, (void *)this)) != 0)
     {
-        log("Failed to create thread : %d", res);
+        debug("Failed to create thread : %d", res);
         close(this->socket_fd);
     }
 }
 
-void Client::queue_packet(Packet *packet)
+void Client::send_packet(Packet *packet)
 {
-    this->outgoing_packet_queue.push(packet);
+    size_t size = packet->data->getWriteOffset();
+
+    packet->data->offset(1 + 16 + 4);
+    packet->data->setWriteOffset(0);
+    packet->data->writeUnsignedByte((u8)packet->header->command);
+    packet->data->write(packet->header->uuid, 16);
+    packet->data->writeUnsignedInt(size);
+
+    debug("Sending packet with command %d and size %d", packet->header->command, size);
+
+    size_t bytes_written = 0;
+    while (bytes_written >= 0 && bytes_written != (packet->data->getWriteOffset() + size))
+    {
+        // debug("Remaining bytes to write: %d", packet->data->getWriteOffset() + size - bytes_written);
+
+        size_t b = (size_t)send(this->socket_fd, packet->data->getBuffer() + bytes_written, packet->data->getWriteOffset() + size - bytes_written, 0);
+        if (bytes_written < 0)
+        {
+            debug("Failed to send data: %d", bytes_written);
+            close(this->socket_fd);
+            break;
+        }
+
+        bytes_written += b;
+    }
+
+    free(packet->data);
+    free(packet);
 }
 
 void *Client::handle_connection()
 {
     while (true)
     {
-        if (!this->incomming_packet_queue.empty())
+        struct pollfd pfds[1];
+
+        pfds[0].fd = this->socket_fd;
+        pfds[0].events = POLLIN;
+
+        int ret = poll(pfds, 1, 0);
+        if (ret > 0 && (pfds[0].revents & POLLIN))
         {
-            Packet *packet = this->incomming_packet_queue.front();
-            this->incomming_packet_queue.pop();
+            Packet *packet = read_packet(this->socket_fd);
+            if (packet == nullptr)
+            {
+                debug("Failed to read packet");
+                break;
+            }
 
             this->handle_packet(packet);
         }
 
-        svcSleepThread(50 * 1e+6L);
+        svcSleepThread(0);
     }
 
     close(this->socket_fd);
@@ -77,17 +115,17 @@ void Client::handle_packet(Packet *packet)
     int maxpids;
     s32 count;
 
-    log("Processing command %d", command);
+    debug("Processing command %d", command);
 
     switch (command)
     {
     case Command::Attach:
         pid = buffer->readUnsignedLong();
-        log("Attaching to process %d", pid);
+        debug("Attaching to process %d", pid);
 
         if (debugHandle != INVALID_HANDLE)
         {
-            log("Closing old debug handle");
+            debug("Closing old debug handle");
 
             rc = svcCloseHandle(debugHandle);
             if (R_FAILED(rc))
@@ -103,7 +141,7 @@ void Client::handle_packet(Packet *packet)
         {
             attachedProcessId = pid;
             status = Status::Paused;
-            log("Attached to process %d", pid);
+            debug("Attached to process %d", pid);
         }
         else
         {
@@ -190,6 +228,8 @@ void Client::handle_packet(Packet *packet)
         address = buffer->readUnsignedLong();
         size = buffer->readUnsignedInt();
 
+        debug("Reading %d bytes from %08lx", size, address);
+
         while (size > 0)
         {
             u64 len = size < MAX_BUFFER_SIZE ? size : MAX_BUFFER_SIZE;
@@ -252,7 +292,6 @@ void Client::handle_packet(Packet *packet)
         data->writeUnsignedInt(rc);
         break;
     case Command::GetCurrentPID:
-        log("Getting current PID");
         rc = pmdmntGetApplicationProcessId(&pid);
         if (R_FAILED(rc))
         {
@@ -261,10 +300,9 @@ void Client::handle_packet(Packet *packet)
 
         data->writeUnsignedInt(rc);
         data->writeUnsignedLong(pid);
-        log("Current PID: %d", pid);
         break;
     case Command::GetAttachedPID:
-        data->writeUnsignedInt(attachedProcessId);
+        data->writeUnsignedLong(attachedProcessId);
         break;
     case Command::GetTitleID:
         pid = buffer->readUnsignedLong();
@@ -308,12 +346,9 @@ void Client::handle_packet(Packet *packet)
         break;
     }
 
-    log("Command %d processed", command);
-
     if (data->getWriteOffset() > 0)
     {
-        log("Sending response for command %d", command);
         Packet *packet = new Packet{new PacketHeader{command, uuid, data->getWriteOffset()}, data};
-        this->outgoing_packet_queue.push(packet);
+        this->send_packet(packet);
     }
 }

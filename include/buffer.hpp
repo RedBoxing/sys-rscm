@@ -4,6 +4,7 @@
 #include <string.h>
 #include <cstdarg>
 #include <cstdio>
+#include "utils.hpp"
 
 class Buffer
 {
@@ -282,6 +283,10 @@ public:
         va_end(args);
 
         this->writeString(this->write_offset, buffer);
+
+        size_t readed_lenght = this->read<size_t>(this->write_offset, sizeof(size_t));
+        char *readed_string = this->readString(this->write_offset + sizeof(size_t), readed_lenght);
+        this->write_offset += sizeof(size_t);
         this->write_offset += strlen(buffer);
     }
 

@@ -90,3 +90,5 @@ struct Packet
     PacketHeader *header;
     Buffer *data;
 };
+
+Packet *read_packet(int socket_fd);

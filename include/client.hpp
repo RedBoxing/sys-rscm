@@ -8,7 +8,7 @@ class Client
 public:
     Client(int socket_fd);
 
-    void queue_packet(Packet *packet);
+    void send_packet(Packet *packet);
     void *handle_connection();
 
     std::queue<Packet *> *get_incomming_packet_queue()

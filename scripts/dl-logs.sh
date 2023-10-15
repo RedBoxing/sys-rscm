@@ -1,1 +1,1 @@
-curl ftp://$SWITCH_USER:$SWITCH_PASS@switch.redboxing.local:5000/logs/sys-rscm.log
+curl ftp://$SWITCH_USER:$SWITCH_PASS@$SWITCH_HOST:5000/logs/sys-rscm.log
