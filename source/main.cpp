@@ -156,7 +156,7 @@ int main(int argc, char *argv[])
             }
         }
 
-        flushEvents();
+        // flushEvents();
         svcSleepThread(0);
     }
 

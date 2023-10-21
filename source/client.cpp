@@ -46,8 +46,6 @@ void Client::send_packet(Packet *packet)
     size_t bytes_written = 0;
     while (bytes_written >= 0 && bytes_written != (packet->data->getWriteOffset() + size))
     {
-        // debug("Remaining bytes to write: %d", packet->data->getWriteOffset() + size - bytes_written);
-
         size_t b = (size_t)send(this->socket_fd, packet->data->getBuffer() + bytes_written, packet->data->getWriteOffset() + size - bytes_written, 0);
         if (bytes_written < 0)
         {
@@ -114,6 +112,7 @@ void Client::handle_packet(Packet *packet)
     u64 tid;
     int maxpids;
     s32 count;
+    int nbrMemInfo;
 
     debug("Processing command %d", command);
 
@@ -130,7 +129,7 @@ void Client::handle_packet(Packet *packet)
             rc = svcCloseHandle(debugHandle);
             if (R_FAILED(rc))
             {
-                log("Failed to close debug handle: %d", rc);
+                debug("Failed to close debug handle: %d", rc);
                 data->writeUnsignedInt(rc);
                 break;
             }
@@ -145,7 +144,7 @@ void Client::handle_packet(Packet *packet)
         }
         else
         {
-            log("Failed to attach to process: %d", rc);
+            debug("Failed to attach to process: %d", rc);
             debugHandle = INVALID_HANDLE;
         }
 
@@ -159,7 +158,7 @@ void Client::handle_packet(Packet *packet)
             rc = svcGetDebugEvent(&event, debugHandle);
             if (R_FAILED(rc))
             {
-                log("Failed to get debug event: %d", rc);
+                debug("Failed to get debug event: %d", rc);
                 data->writeUnsignedInt(rc);
                 break;
             }
@@ -196,33 +195,41 @@ void Client::handle_packet(Packet *packet)
         address = buffer->readUnsignedLong();
         max = buffer->readUnsignedInt();
 
+        nbrMemInfo = 0;
+        data->writeUnsignedInt(0);
+
         for (u32 i = 0; i < max; i++)
         {
             u32 pageinfo;
             meminfo = {0};
             rc = svcQueryDebugProcessMemory(&meminfo, &pageinfo, debugHandle, address);
-            if (R_FAILED(rc))
-            {
-                log("Failed to query memory: %d", rc);
-                break;
-            }
-
-            data->writeUnsignedLong(meminfo.addr);
-            data->writeUnsignedLong(meminfo.size);
-            data->writeUnsignedInt(meminfo.type);
-            data->writeUnsignedInt(meminfo.perm);
 
             data->writeUnsignedInt(rc);
+            nbrMemInfo++;
 
-            if (meminfo.type == MemoryType::MemType_Reserved || R_FAILED(rc))
+            if (R_SUCCEEDED(rc))
             {
+                data->writeUnsignedLong(meminfo.addr);
+                data->writeUnsignedLong(meminfo.size);
+                data->writeUnsignedInt(meminfo.type);
+                data->writeUnsignedInt(meminfo.perm);
+
+                if (meminfo.type == MemoryType::MemType_Reserved)
+                {
+                    break;
+                }
+            }
+            else
+            {
+                debug("Failed to query memory: %d", rc);
                 break;
             }
 
             address += meminfo.size;
         }
 
-        data->writeUnsignedInt(rc);
+        data->writeUnsignedInt(0, nbrMemInfo);
+
         break;
     case Command::ReadMemory:
         address = buffer->readUnsignedLong();
@@ -277,7 +284,7 @@ void Client::handle_packet(Packet *packet)
             rc = svcContinueDebugEvent(debugHandle, 4 | 2 | 1, 0, 0);
             if (R_FAILED(rc))
             {
-                log("Failed to continue debug event: %d", rc);
+                debug("Failed to continue debug event: %d", rc);
                 data->writeUnsignedInt(rc);
                 break;
             }
@@ -295,7 +302,7 @@ void Client::handle_packet(Packet *packet)
         rc = pmdmntGetApplicationProcessId(&pid);
         if (R_FAILED(rc))
         {
-            log("Failed to get current PID: %d", rc);
+            debug("Failed to get current PID: %d", rc);
         }
 
         data->writeUnsignedInt(rc);
@@ -310,7 +317,7 @@ void Client::handle_packet(Packet *packet)
         rc = pminfoGetProgramId(&tid, pid);
         if (R_FAILED(rc))
         {
-            log("Failed to get title ID: %d", rc);
+            debug("Failed to get title ID: %d", rc);
         }
 
         data->writeUnsignedInt(rc);
@@ -341,7 +348,7 @@ void Client::handle_packet(Packet *packet)
         data->writeUnsignedInt(rc);
         break;
     default:
-        log("Unknown command %lx", (u8)command);
+        debug("Unknown command %lx", (u8)command);
         data->writeUnsignedInt(0);
         break;
     }
